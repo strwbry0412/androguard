@@ -1,4 +1,5 @@
 from androguard.misc import AnalyzeAPK
+import argparse
 
 
 PACKAGE = "Lowasp/sat/agoat/"
@@ -234,21 +235,7 @@ def print_callback(
         )
 
 
-def print_call_tree(
-    dx,
-    method,
-    depth=0,
-    path=None
-):
-    """
-    メソッドの呼び出し関係を表示する。
-
-    - 通常のメソッド呼び出し → CALL
-    - setOnClickListener → CALLBACK
-    - 外部メソッド → 表示のみ
-    - constructor → 表示しない
-    """
-
+def print_call_tree(dx, method, depth=0, max_depth=1, path=None):
     if path is None:
         path = set()
 
@@ -263,51 +250,29 @@ def print_call_tree(
 
     path = path | {method_key}
 
-    instructions = list(
-        method.get_instructions()
-    )
+    # 指定した深さに到達したら、
+    # このメソッドの中身は展開しない
+    if depth >= max_depth:
+        return
 
-    for i, instruction in enumerate(
-        instructions
-    ):
+    instructions = list(method.get_instructions())
 
-        if not instruction.get_name().startswith(
-            "invoke-"
-        ):
+    for i, instruction in enumerate(instructions):
+        if not instruction.get_name().startswith("invoke-"):
             continue
 
         operands = instruction.get_operands()
-
         method_ref = operands[-1][2]
 
-        # --------------------------------
-        # CALLBACK
-        # --------------------------------
-
         if "setOnClickListener" in method_ref:
-
-            print_callback(
-                dx,
-                instructions,
-                i,
-                depth + 1
-            )
-
+            print_callback(dx, instructions, i, depth + 1)
             continue
 
-        # --------------------------------
-        # 通常のCALL
-        # --------------------------------
-
-        called = find_method(
-            dx,
-            method_ref
-        )
+        called = find_method(dx, method_ref)
 
         if called is None:
             continue
 
-        # constructorはスキップ
         if called.get_name() == "<init>":
             continue
 
@@ -317,26 +282,19 @@ def print_call_tree(
             + method_ref
         )
 
-        # 外部コードはここで終了
-        if not called.get_class_name().startswith(
-            PACKAGE
-        ):
+        if not called.get_class_name().startswith(PACKAGE):
             continue
 
-        # 命令列を持たないものも終了
-        if not hasattr(
-            called,
-            "get_instructions"
-        ):
+        if not hasattr(called, "get_instructions"):
             continue
 
         print_call_tree(
             dx,
             called,
-            depth + 1,
-            path
+            depth=depth + 1,
+            max_depth=max_depth,
+            path=path
         )
-
 
 def summarize_method(dx, method):
     """
@@ -502,8 +460,23 @@ def print_method_summary(dx, method):
                 + str(branch["target"])
             )
 
-            
+
 def main():
+    parser = argparse.ArgumentParser(
+        description="Android APK call tree analyzer"
+    )
+
+    parser.add_argument(
+        "--depth",
+        type=int,
+        default=2,
+        help="Maximum call tree depth (default: 2)"
+    )
+
+    args = parser.parse_args()
+
+    if args.depth < 0:
+        parser.error("--depth must be 0 or greater")
 
     apk_path = "AndroGoat.apk"
 
@@ -512,17 +485,11 @@ def main():
         "->onCreate(Landroid/os/Bundle;)V"
     )
 
-    a, d, dx = AnalyzeAPK(
-        apk_path
-    )
+    a, d, dx = AnalyzeAPK(apk_path)
 
-    target = find_method(
-        dx,
-        target_ref
-    )
+    target = find_method(dx, target_ref)
 
     if target is None:
-
         print("method not found")
         return
 
@@ -539,13 +506,11 @@ def main():
     print_call_tree(
         dx,
         target,
-        depth=0
+        depth=0,
+        max_depth=args.depth
     )
 
-    print_method_summary(
-        dx,
-        target
-    )
+    print_method_summary(dx, target)
 
 
 if __name__ == "__main__":
